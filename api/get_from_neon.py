@@ -41,8 +41,8 @@ class handler(BaseHTTPRequestHandler):
                 sql_query = f"{base_sql} ORDER BY timestamp DESC LIMIT 20;"
 
             # --- 3. Connect and Execute ---
-            # Added client_encoding='UTF8' to stabilize the connection and prevent stray warnings.
-            conn = psycopg2.connect(db_url, client_encoding='UTF8')
+            # Added options to silence all non-fatal PostgreSQL connection messages that might corrupt JSON output.
+            conn = psycopg2.connect(db_url, client_encoding='UTF8', options='-c log_min_messages=FATAL')
             with conn.cursor() as cur:
                 cur.execute(sql_query)
                 rows = cur.fetchall()

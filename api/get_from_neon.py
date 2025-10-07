@@ -30,7 +30,7 @@ def get_connection_pool():
             'port': url_parts.port if url_parts.port else 5432,
             # Additional parameters for stability in serverless environment
             'client_encoding': 'UTF8',
-            'sslmode': 'disable',  # <-- FINAL ATTEMPT FIX: Temporarily disable SSL
+            'sslmode': 'require',  # Reverting to the secure, reliable mode
             # Final fix: Use options to suppress all but FATAL messages and set a reliable application name
             'options': '-c application_name=vercel_api -c log_min_messages=FATAL'
         }
@@ -90,11 +90,11 @@ class handler(BaseHTTPRequestHandler):
             # We are not going to raise this one, it's safe
             self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "Configuration Error", "details": str(e)}))
         except psycopg2.Error as e:
-            # Temporary change: We are now raising the exception to force the Vercel logs to show the traceback.
-            # You will see the Vercel 500 page again, but the logs will contain the details.
-            raise # <-- THIS IS THE KEY CHANGE
+            # Reverted: Now catches the database error and returns the generic error message
+            self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "A database error occurred.", "details": "Check Vercel logs for specific DB error."}))
         except Exception as e:
-            raise # <-- THIS IS THE KEY CHANGE
+            # Reverted: Now catches general errors and returns a generic error message
+            self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "An unexpected server error occurred.", "details": str(e)}))
         finally:
             if pool and conn:
                 # Return the connection to the pool, don't close it

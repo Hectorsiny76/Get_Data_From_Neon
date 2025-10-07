@@ -51,7 +51,9 @@ class handler(BaseHTTPRequestHandler):
                 'port': url_parts.port if url_parts.port else 5432,
                 # Additional parameters for robust connection and silencing warnings
                 'client_encoding': 'UTF8',
-                'options': '-c log_min_messages=FATAL'
+                'options': '-c log_min_messages=FATAL',
+                # FINAL FIX: Explicitly setting sslmode=require for serverless environment compatibility
+                'sslmode': 'require' 
             }
             
             # --- 2. Build SQL Query Dynamically ---

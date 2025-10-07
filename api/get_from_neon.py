@@ -30,13 +30,14 @@ def get_connection_pool():
             'port': url_parts.port if url_parts.port else 5432,
             # Additional parameters for stability in serverless environment
             'client_encoding': 'UTF8',
-            'sslmode': 'require', 
+            'sslmode': 'prefer', 
             # Final fix: Use options to suppress all but FATAL messages and set a reliable application name
             'options': '-c application_name=vercel_api -c log_min_messages=FATAL'
         }
         
         # --- 2. Initialize the Connection Pool ---
         # minconn=1, maxconn=3 is sufficient for a low-traffic API
+        # The connection pool is necessary to handle Vercel's rapid function invocations
         db_pool = SimpleConnectionPool(1, 3, **conn_params)
 
     return db_pool

@@ -30,7 +30,7 @@ def get_connection_pool():
             'port': url_parts.port if url_parts.port else 5432,
             # Additional parameters for stability in serverless environment
             'client_encoding': 'UTF8',
-            'sslmode': 'prefer', 
+            'sslmode': 'disable',  # <-- FINAL ATTEMPT FIX: Temporarily disable SSL
             # Final fix: Use options to suppress all but FATAL messages and set a reliable application name
             'options': '-c application_name=vercel_api -c log_min_messages=FATAL'
         }

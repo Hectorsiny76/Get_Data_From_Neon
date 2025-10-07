@@ -87,12 +87,14 @@ class handler(BaseHTTPRequestHandler):
                 self._send_response(200, {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, json.dumps(result))
 
         except EnvironmentError as e:
+            # We are not going to raise this one, it's safe
             self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "Configuration Error", "details": str(e)}))
         except psycopg2.Error as e:
-            # Check the Vercel logs for the specific error, but return a generic 500 to the client
-            self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "A database error occurred.", "details": "Check Vercel logs for specific DB error."}))
+            # Temporary change: We are now raising the exception to force the Vercel logs to show the traceback.
+            # You will see the Vercel 500 page again, but the logs will contain the details.
+            raise # <-- THIS IS THE KEY CHANGE
         except Exception as e:
-            self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "An unexpected server error occurred.", "details": str(e)}))
+            raise # <-- THIS IS THE KEY CHANGE
         finally:
             if pool and conn:
                 # Return the connection to the pool, don't close it

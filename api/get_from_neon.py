@@ -41,7 +41,8 @@ class handler(BaseHTTPRequestHandler):
                 sql_query = f"{base_sql} ORDER BY timestamp DESC LIMIT 20;"
 
             # --- 3. Connect and Execute ---
-            conn = psycopg2.connect(db_url)
+            # Added client_encoding='UTF8' to stabilize the connection and prevent stray warnings.
+            conn = psycopg2.connect(db_url, client_encoding='UTF8')
             with conn.cursor() as cur:
                 cur.execute(sql_query)
                 rows = cur.fetchall()
@@ -58,12 +59,8 @@ class handler(BaseHTTPRequestHandler):
                 self._send_response(200, {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, json.dumps(result))
 
         except psycopg2.Error as e:
-            # ONLY print errors to the log, not to the output stream
-            # print(f"PostgreSQL Error: {e}") <-- Removed this for clean output
             self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "A database error occurred.", "details": "Check Vercel logs for specific DB error."}))
         except Exception as e:
-            # ONLY print errors to the log, not to the output stream
-            # print(f"Unexpected Error: {e}") <-- Removed this for clean output
             self._send_response(500, {'Content-Type': 'application/json'}, json.dumps({"error": "An unexpected server error occurred.", "details": str(e)}))
         finally:
             if conn:

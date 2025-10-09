@@ -3,10 +3,21 @@ import psycopg2
 from fastapi import FastAPI, Header, HTTPException
 from dotenv import load_dotenv
 
-# This line loads the variables from your .env file for local testing
-load_dotenv()
+# >>>>> 1. IMPORT THE CORS MIDDLEWARE <<<<<
+from fastapi.middleware.cors import CORSMiddleware
 
+load_dotenv()
 app = FastAPI()
+
+# >>>>> 2. ADD THE MIDDLEWARE TO YOUR APP <<<<<
+# This tells your API to allow requests from any origin (*).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
 
 # Get your secrets from the environment
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -88,11 +99,11 @@ async def create_upload(data: dict, x_api_key: str = Header(None)):
         conn = psycopg2.connect(DATABASE_URL)
         with conn.cursor() as cur:
             sql = """
-                INSERT INTO sensor_data (thingspeak_id, timestamp, temperature, humidity, latitude, longitude, fire_score)
+                INSERT INTO sensor_data (timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (thingspeak_id) DO NOTHING;
             """
-            cur.execute(sql, (ts_id, ts, temp, hum, lat, lon, score))
+            cur.execute(sql, (ts, temp, hum, lat, lon, score, ts_id))
         conn.commit()
         
         print(f"Successfully inserted/updated data for ThingSpeak ID: {ts_id}")

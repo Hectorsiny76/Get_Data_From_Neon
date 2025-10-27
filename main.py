@@ -1,16 +1,17 @@
 import os
 import psycopg2
-from fastapi import FastAPI, Header, HTTPException
+import json  # >>>>> 1. IMPORT JSON <<<<<
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect  # >>>>> 2. IMPORT WEBSOCKETS <<<<<
 from dotenv import load_dotenv
+from typing import List  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
 
-# >>>>> 1. IMPORT THE CORS MIDDLEWARE <<<<<
+# >>>>> We still need this middleware <<<<<
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 app = FastAPI()
 
-# >>>>> 2. ADD THE MIDDLEWARE TO YOUR APP <<<<<
-# This tells your API to allow requests from any origin (*).
+# >>>>> Your existing middleware setup (unchanged) <<<<<
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
@@ -19,12 +20,66 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Get your secrets from the environment
+# Get your secrets from the environment (unchanged)
 DATABASE_URL = os.getenv("DATABASE_URL")
 SECRET_API_KEY = os.getenv("UPLOADER_API_KEY")
 
 # ===================================================================
-# Your existing PUBLIC endpoint to READ data with time filters.
+# >>>>> 4. ADD THE WEBSOCKET CONNECTION MANAGER <<<<<
+# This class will manage all active client connections
+# ===================================================================
+class ConnectionManager:
+    def __init__(self):
+        # A list to hold all active WebSocket connections
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        # Accept the new connection
+        await websocket.accept()
+        # Add it to our list
+        self.active_connections.append(websocket)
+        print("New client connected.")
+
+    def disconnect(self, websocket: WebSocket):
+        # Remove the connection from the list
+        self.active_connections.remove(websocket)
+        print("Client disconnected.")
+
+    async def broadcast(self, message: str):
+        # Send a message to all connected clients
+        for connection in self.active_connections:
+            await connection.send_text(message)
+
+# Create a single, shared instance of the manager for our app
+manager = ConnectionManager()
+
+
+# ===================================================================
+# >>>>> 5. ADD THE NEW WEBSOCKET ENDPOINT <<<<<
+# This is where your websites/apps will connect to listen
+# ===================================================================
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    # Connect the client
+    await manager.connect(websocket)
+    try:
+        # This loop just keeps the connection alive.
+        # You could also use it to receive messages *from* the client if needed.
+        while True:
+            # Wait for a message (this is just to keep the connection open)
+            data = await websocket.receive_text()
+            print(f"Received message from client: {data}")
+            # (Optional) You could echo the message back or to everyone
+            # await manager.broadcast(f"Client says: {data}")
+
+    except WebSocketDisconnect:
+        # When the client disconnects, remove them from the list
+        manager.disconnect(websocket)
+
+
+# ===================================================================
+# Your existing PUBLIC endpoint to READ data (UNCHANGED)
+# This is still useful for loading historical data when a client first loads.
 # ===================================================================
 @app.get("/sensor_data")
 def read_sensor_data(time_range: str = "7d"):
@@ -75,18 +130,20 @@ def read_sensor_data(time_range: str = "7d"):
         if conn is not None:
             conn.close()
 
+
 # ===================================================================
-# The new PRIVATE endpoint for the uploader script to WRITE data.
+# >>>>> 6. YOUR MODIFIED ENDPOINT TO WRITE DATA <<<<<
+# This is the endpoint your IoT uploader script calls.
 # ===================================================================
 @app.post("/data")
 async def create_upload(data: dict, x_api_key: str = Header(None)):
-    # 1. Security Check: Validate the API key
+    # 1. Security Check: Validate the API key (unchanged)
     if x_api_key != SECRET_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
     conn = None
     try:
-        # 2. Extract data from the request
+        # 2. Extract data from the request (unchanged)
         ts_id = data.get('thingspeak_id')
         ts = data.get('created_at')
         temp = data.get('temperature')
@@ -95,7 +152,7 @@ async def create_upload(data: dict, x_api_key: str = Header(None)):
         lon = data.get('longitude')
         score = data.get('fire_score')
         
-        # 3. Insert the new data into the database
+        # 3. Insert the new data into the database (unchanged)
         conn = psycopg2.connect(DATABASE_URL)
         with conn.cursor() as cur:
             sql = """
@@ -107,6 +164,11 @@ async def create_upload(data: dict, x_api_key: str = Header(None)):
         conn.commit()
         
         print(f"Successfully inserted/updated data for ThingSpeak ID: {ts_id}")
+
+        # >>>>> 4. NEW STEP: BROADCAST THE NEW DATA TO ALL LISTENERS <<<<<
+        # We convert the 'data' dictionary into a JSON string to send it.
+        await manager.broadcast(json.dumps(data))
+        
         return {"status": "success", "data_received": data}
         
     except Exception as e:

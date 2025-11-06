@@ -82,7 +82,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # This is still useful for loading historical data when a client first loads.
 # ===================================================================
 @app.get("/sensor_data")
-def read_sensor_data(time_range: str = "7d"):
+def read_sensor_data(time_range: str = "30d"):
     """
     Fetches records from the sensor_data table based on a time range.
     Valid time_range values: 'today', '7d', '30d'.

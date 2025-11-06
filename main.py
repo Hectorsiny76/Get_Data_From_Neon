@@ -66,11 +66,8 @@ async def websocket_endpoint(websocket: WebSocket):
         # This loop just keeps the connection alive.
         # You could also use it to receive messages *from* the client if needed.
         while True:
-            # Wait for a message (this is just to keep the connection open)
-            data = await websocket.receive_text()
-            print(f"Received message from client: {data}")
-            # (Optional) You could echo the message back or to everyone
-            # await manager.broadcast(f"Client says: {data}")
+            # Just keep the connection open
+            await asyncio.sleep(30)  # acts like a heartbeat
 
     except WebSocketDisconnect:
         # When the client disconnects, remove them from the list

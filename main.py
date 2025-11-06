@@ -177,3 +177,17 @@ async def create_upload(data: dict, x_api_key: str = Header(None)):
     finally:
         if conn:
             conn.close()
+            
+# Test the API
+@app.get("/test_db")
+def test_db():
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM sensor_data;")
+        count = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        return {"status": "connected", "rows_in_table": count}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}

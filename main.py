@@ -1,7 +1,9 @@
 import os
+import asyncio
+from starlette.websockets import WebSocketState
 import psycopg2
 import json  # >>>>> 1. IMPORT JSON <<<<<
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect  # >>>>> 2. IMPORT WEBSOCKETS <<<<<
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks # >>>>> 2. IMPORT WEBSOCKETS <<<<<
 from dotenv import load_dotenv
 from typing import List  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
 
@@ -31,24 +33,42 @@ SECRET_API_KEY = os.getenv("UPLOADER_API_KEY")
 class ConnectionManager:
     def __init__(self):
         # A list to hold all active WebSocket connections
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: set[WebSocket] = set()
+        self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket):
         # Accept the new connection
         await websocket.accept()
         # Add it to our list
-        self.active_connections.append(websocket)
+        async with self._lock:
+            self.active_connections.add(websocket)
         print("New client connected.")
 
-    def disconnect(self, websocket: WebSocket):
+    async def disconnect(self, websocket: WebSocket):
         # Remove the connection from the list
-        self.active_connections.remove(websocket)
+        async with self._lock:
+            self.active_connections.discard(websocket)
         print("Client disconnected.")
 
     async def broadcast(self, message: str):
-        # Send a message to all connected clients
-        for connection in self.active_connections:
-            await connection.send_text(message)
+        # snapshot to avoid mutating while iterating
+        async with self._lock:
+            conns = list(self.active_connections)
+            
+        to_drop = []
+        for ws in conns:
+            try:
+                if ws.application_state == WebSocketState.CONNECTED:
+                    await ws.send_text(message)
+                else:
+                    to_drop.append(ws)
+            except Exception:
+                to_drop.append(ws)
+                
+        if to_drop:
+            async with self._lock:
+                for ws in to_drop:
+                    self.active_connections.discard(ws)
 
 # Create a single, shared instance of the manager for our app
 manager = ConnectionManager()
@@ -67,7 +87,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # You could also use it to receive messages *from* the client if needed.
         while True:
             # Just keep the connection open
-            await asyncio.sleep(30)  # acts like a heartbeat
+            await websocket.receive_text()  # acts like a heartbeat
 
     except WebSocketDisconnect:
         # When the client disconnects, remove them from the list
@@ -133,7 +153,7 @@ def read_sensor_data(time_range: str = "30d"):
 # This is the endpoint your IoT uploader script calls.
 # ===================================================================
 @app.post("/data")
-async def create_upload(data: dict, x_api_key: str = Header(None)):
+async def create_upload(data: dict, x_api_key: str = Header(None), background_tasks: BackgroundTasks = None):
     # 1. Security Check: Validate the API key (unchanged)
     if x_api_key != SECRET_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
@@ -164,7 +184,9 @@ async def create_upload(data: dict, x_api_key: str = Header(None)):
 
         # >>>>> 4. NEW STEP: BROADCAST THE NEW DATA TO ALL LISTENERS <<<<<
         # We convert the 'data' dictionary into a JSON string to send it.
-        await manager.broadcast(json.dumps(data))
+        # Broadcast afer responding
+        payload = json.dumps(data)
+        background_tasks.add_task(manager.broadcast, payload)
         
         return {"status": "success", "data_received": data}
         

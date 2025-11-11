@@ -58,7 +58,8 @@ class ConnectionManager:
         to_drop = []
         for ws in conns:
             try:
-                if ws.application_state == WebSocketState.CONNECTED:
+                if (ws.application_state == WebSocketState.CONNECTED
+                    and ws.client_state == WebSocketState.CONNECTED):
                     await ws.send_text(message)
                 else:
                     to_drop.append(ws)
@@ -91,7 +92,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         # When the client disconnects, remove them from the list
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
 
 
 # ===================================================================
@@ -153,7 +154,7 @@ def read_sensor_data(time_range: str = "30d"):
 # This is the endpoint your IoT uploader script calls.
 # ===================================================================
 @app.post("/data")
-async def create_upload(data: dict, x_api_key: str = Header(None), background_tasks: BackgroundTasks = None):
+async def create_upload(data: dict, x_api_key: str = Header(None), background_tasks: BackgroundTasks = ...):
     # 1. Security Check: Validate the API key (unchanged)
     if x_api_key != SECRET_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")

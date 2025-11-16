@@ -5,7 +5,7 @@ import psycopg2
 import json  # >>>>> 1. IMPORT JSON <<<<<
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks # >>>>> 2. IMPORT WEBSOCKETS <<<<<
 from dotenv import load_dotenv
-from typing import List  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
+from typing import List, Optional  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
 
 # >>>>> We still need this middleware <<<<<
 from fastapi.middleware.cors import CORSMiddleware
@@ -100,38 +100,43 @@ async def websocket_endpoint(websocket: WebSocket):
 # This is still useful for loading historical data when a client first loads.
 # ===================================================================
 @app.get("/sensor_data")
-def read_sensor_data(time_range: str = "30d"):
+def read_sensor_data(time_range: str = "30d", limit: int = 500, offset: int = 0):
     """
     Fetches records from the sensor_data table based on a time range.
     Valid time_range values: 'today', '7d', '30d'.
     """
-    sql_query = """
+    
+    limit = max(1, min(limit, 5000))
+    offset = max(0, offset)
+    
+    
+    base_sql = """
         SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score 
         FROM sensor_data
     """
     
     if time_range == "today":
-        sql_query += " WHERE timestamp >= NOW()::date"
+        base_sql += " WHERE timestamp >= NOW()::date"
     elif time_range == "7d":
-        sql_query += " WHERE timestamp >= NOW() - INTERVAL '7 days'"
+        base_sql += " WHERE timestamp >= NOW() - INTERVAL '7 days'"
     elif time_range == "30d":
-        sql_query += " WHERE timestamp >= NOW() - INTERVAL '30 days'"
+        base_sql += " WHERE timestamp >= NOW() - INTERVAL '30 days'"
     else:
         raise HTTPException(
             status_code=400, 
             detail="Invalid time_range. Use 'today', '7d', or '30d'."
         )
         
-    sql_query += " ORDER BY timestamp DESC;"
+    sql = base_sql + " ORDER BY timestamp DESC LIMIT %s OFFSET %s;"
 
     conn = None
     try:
         if not DATABASE_URL:
             raise HTTPException(status_code=500, detail="Database URL is not configured.")
             
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
         cur = conn.cursor()
-        cur.execute(sql_query)
+        cur.execute(base_sql, (limit, offset))
         
         rows = cur.fetchall()
         column_names = [desc[0] for desc in cur.description]
@@ -197,6 +202,63 @@ async def create_upload(data: dict, x_api_key: str = Header(None), background_ta
     finally:
         if conn:
             conn.close()
+            
+@app.get("/sensor_data/latest")
+def read_latest(limit: int = 1, per_device: bool = False, device_id: Optional[int] = None):
+        """
+    Quick endpoint for the initial load:
+      - latest overall (default)
+      - latest N overall (limit)
+      - latest per device (per_device=true)
+      - latest for a specific device (device_id)
+    """
+        limit = max(1, min(limit, 1000))
+        
+        conn = None
+        try:
+            if not DATABASE_URL:
+                raise HTTPException(status_code=500, detail="Database URL is not configured.")
+            conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+            cur = conn.cursor()
+            
+            if device_id is not None:
+                sql = """
+                SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
+                FROM sensor_data
+                WHERE thingspeak_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1;
+            """
+                cur.execute(sql, (device_id))
+            elif per_device:
+                #One latest row per device
+                sql = """
+                SELECT DISTINCT ON (thingspeak_id)
+                       id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
+                FROM sensor_data
+                ORDER BY thingspeak_id, timestamp DESC
+                LIMIT %s;
+            """
+                cur.execute(sql, (limit,))
+            else:
+                sql = """
+                SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
+                FROM sensor_data
+                ORDER BY timestamp DESC
+                LIMIT %s;
+            """
+            cur.execute(sql, (limit,))
+
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception as e:
+            print(f"Database error: {e}")
+            raise HTTPException(status_code=500, detail="Failed to fetch data from the database.")
+        finally:
+            if conn is not None:
+                conn.close()
+
             
 # Test the API
 @app.get("/test_db")

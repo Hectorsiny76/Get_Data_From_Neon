@@ -204,61 +204,34 @@ async def create_upload(data: dict, x_api_key: str = Header(None), background_ta
             conn.close()
             
 @app.get("/sensor_data/latest")
-def read_latest(limit: int = 1, per_device: bool = False, device_id: Optional[int] = None):
-        """
-    Quick endpoint for the initial load:
-      - latest overall (default)
-      - latest N overall (limit)
-      - latest per device (per_device=true)
-      - latest for a specific device (device_id)
-    """
-        limit = max(1, min(limit, 1000))
-        
-        conn = None
-        try:
-            if not DATABASE_URL:
-                raise HTTPException(status_code=500, detail="Database URL is not configured.")
-            conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-            cur = conn.cursor()
-            
-            if device_id is not None:
-                sql = """
-                SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
-                FROM sensor_data
-                WHERE thingspeak_id = %s
-                ORDER BY timestamp DESC
-                LIMIT 1;
-            """
-                cur.execute(sql, (device_id))
-            elif per_device:
-                #One latest row per device
-                sql = """
-                SELECT DISTINCT ON (thingspeak_id)
-                       id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
-                FROM sensor_data
-                ORDER BY thingspeak_id, timestamp DESC
-                LIMIT %s;
-            """
-                cur.execute(sql, (limit,))
-            else:
-                sql = """
-                SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
-                FROM sensor_data
-                ORDER BY timestamp DESC
-                LIMIT %s;
-            """
-            cur.execute(sql, (limit,))
+def read_latest(limit: int = 1):
+    limit = max(1, min(limit, 1000))
 
-            rows = cur.fetchall()
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, r)) for r in rows]
-        except Exception as e:
-            print(f"Database error: {e}")
-            raise HTTPException(status_code=500, detail="Failed to fetch data from the database.")
-        finally:
-            if conn is not None:
-                conn.close()
+    conn = None
+    try:
+        if not DATABASE_URL:
+            raise HTTPException(status_code=500, detail="Database URL is not configured.")
 
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
+            FROM sensor_data
+            ORDER BY timestamp DESC
+            LIMIT %s;
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in rows]
+    except Exception as e:
+        print(f"/sensor_data/latest error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch latest data.")
+    finally:
+        if conn is not None:
+            conn.close()
             
 # Test the API
 @app.get("/test_db")

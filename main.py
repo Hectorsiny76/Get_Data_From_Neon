@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from typing import List, Optional  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
 from datetime import datetime, timezone
 from fastapi.responses import HTMLResponse
-from startlette.middleware.gzip import GZipMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 

@@ -7,6 +7,10 @@ from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconne
 from dotenv import load_dotenv
 from typing import List, Optional  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
 from datetime import datetime, timezone
+from fastapi.responses import HTMLResponse
+from startlette.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 # >>>>> We still need this middleware <<<<<
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +26,10 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
     allow_headers=["*"],  # Allows all headers
 )
+
+#Gzip responses
+app.add_middleware(GZipMiddleware, minimum_size=500)
+app.mount("/static", StaticFiles(directory="static", name="static"))
 
 # Get your secrets from the environment (unchanged)
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -91,6 +99,119 @@ def coerce_ts(v):
         except Exception:
             return datetime.now(timezone.utc)
     return datetime.now(timezone.utc)
+
+@app.get("/favicon.png", include_in_schema=False)
+def favicon():
+    return FileResponse(
+        "static/favicon.png",
+        media_type="image/x-icon",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+#-------------ROOT------------
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon.png">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sensor Dashboard (MVP)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; background:#0b1020; color:#e9eefb; }
+    .card { max-width: 660px; padding: 1.25rem 1.5rem; border-radius: 14px; background: #151b34; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+    h1 { margin: 0 0 .75rem; font-size: 1.25rem; font-weight: 700; }
+    .row { display: grid; grid-template-columns: 160px 1fr; gap: .5rem 1rem; margin: .25rem 0; }
+    .key { opacity: .7 }
+    .pill { display:inline-block; padding:.25rem .5rem; border:1px solid #2b355f; border-radius: 999px; font-size:.85rem; }
+    .muted { opacity:.7 }
+    .ok { color:#52ffa1 }
+    .warn { color:#ffd25b }
+    .bad { color:#ff6b6b }
+    .foot { margin-top: .75rem; font-size: .85rem; }
+    a { color:#9ec3ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Latest reading <span id="device" class="pill muted"></span></h1>
+    <div class="row"><div class="key">Timestamp</div><div id="ts" class="muted">—</div></div>
+    <div class="row"><div class="key">Temperature</div><div id="temp">—</div></div>
+    <div class="row"><div class="key">Humidity</div><div id="hum">—</div></div>
+    <div class="row"><div class="key">Fire score</div><div id="score">—</div></div>
+    <div class="row"><div class="key">Location</div><div id="loc">—</div></div>
+    <div class="foot muted">
+      Data source: <code>/sensor_data/latest</code> · Live updates via <code>/ws</code>
+    </div>
+  </div>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+
+    function fmtTs(v) {
+      try {
+        // server returns either `timestamp` (DB) or `created_at` (broadcast)
+        const iso = (typeof v === 'string') ? v : (v?.toString() ?? '');
+        return new Date(iso).toLocaleString();
+      } catch { return String(v ?? '—'); }
+    }
+
+    function classifyScore(s) {
+      if (s == null || Number.isNaN(+s)) return 'muted';
+      const n = +s;
+      if (n >= 0.7) return 'bad';
+      if (n >= 0.4) return 'warn';
+      return 'ok';
+    }
+
+    function render(row) {
+      if (!row) return;
+      const ts = row.timestamp ?? row.created_at;
+      const t  = row.temperature;
+      const h  = row.humidity;
+      const fs = row.fire_score;
+      const lat = row.latitude, lon = row.longitude;
+      const dev = row.thingspeak_id ?? row.device ?? '';
+
+      el('ts').textContent   = fmtTs(ts);
+      el('temp').textContent = (t != null) ? `${(+t).toFixed(2)} °C` : '—';
+      el('hum').textContent  = (h != null) ? `${(+h).toFixed(1)} %` : '—';
+      el('score').textContent = (fs != null) ? (+fs).toFixed(3) : '—';
+      el('score').className = classifyScore(+fs);
+      el('loc').textContent = (lat!=null && lon!=null) ? `${(+lat).toFixed(5)}, ${(+lon).toFixed(5)}` : '—';
+      el('device').textContent = dev ? `channel ${dev}` : '';
+    }
+
+    // First paint: fetch the latest row
+    fetch('/sensor_data/latest?limit=1')
+      .then(r => r.json())
+      .then(arr => render(arr[0]))
+      .catch(() => { /* ignore */ });
+
+    // Live updates: WebSocket with simple backoff reconnect
+    (function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      let backoff = 1000;
+
+      ws.onmessage = (ev) => {
+        try { render(JSON.parse(ev.data)); } catch {}
+      };
+      ws.onopen = () => { backoff = 1000; };
+      ws.onclose = () => {
+        setTimeout(connectWS, backoff);
+        backoff = Math.min(backoff * 2, 10000);
+      };
+      ws.onerror = () => { try { ws.close(); } catch {} };
+    })();
+  </script>
+</body>
+</html>
+    """
+
 
 
 # ===================================================================
@@ -251,6 +372,9 @@ def read_latest(limit: int = 1):
     finally:
         if conn is not None:
             conn.close()
+            
+@app.get("/health")
+def health(): return {"ok": True}
             
 # Test the API
 @app.get("/test_db")

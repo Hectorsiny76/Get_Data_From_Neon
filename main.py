@@ -154,7 +154,7 @@ def read_sensor_data(time_range: str = "30d", limit: int = 500, offset: int = 0)
             
         conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
         cur = conn.cursor()
-        cur.execute(base_sql, (limit, offset))
+        cur.execute(sql, (limit, offset))
         
         rows = cur.fetchall()
         column_names = [desc[0] for desc in cur.description]

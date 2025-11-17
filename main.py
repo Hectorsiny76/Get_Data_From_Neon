@@ -6,6 +6,7 @@ import json  # >>>>> 1. IMPORT JSON <<<<<
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks # >>>>> 2. IMPORT WEBSOCKETS <<<<<
 from dotenv import load_dotenv
 from typing import List, Optional  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
+from datetime import datetime, timezone
 
 # >>>>> We still need this middleware <<<<<
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,6 +76,23 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def coerce_ts(v):
+    if not v:
+        return datetime.now(timezone.utc)
+    if isinstance(v, (int, float)):
+        return datetime.fromtimestamp(v, tz=timezone.utc)
+    if isinstance(v, str):
+        s = v.strip()
+        # hande ISO8601 with z
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(s)
+        except Exception:
+            return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)
+
+
 # ===================================================================
 # >>>>> 5. ADD THE NEW WEBSOCKET ENDPOINT <<<<<
 # This is where your websites/apps will connect to listen
@@ -127,7 +145,7 @@ def read_sensor_data(time_range: str = "30d", limit: int = 500, offset: int = 0)
             detail="Invalid time_range. Use 'today', '7d', or '30d'."
         )
         
-    sql = base_sql + " ORDER BY timestamp DESC LIMIT %s OFFSET %s;"
+    sql = base_sql + " ORDER BY timestamp DESC NULLS LAST, id DESC LIMIT %s OFFSET %s;"
 
     conn = None
     try:
@@ -168,7 +186,8 @@ async def create_upload(data: dict, x_api_key: str = Header(None), background_ta
     try:
         # 2. Extract data from the request (unchanged)
         ts_id = data.get('thingspeak_id')
-        ts = data.get('created_at')
+        ts_raw = data.get('created_at')
+        ts = coerce_ts(ts_raw)
         temp = data.get('temperature')
         hum = data.get('humidity')
         lat = data.get('latitude')
@@ -218,7 +237,7 @@ def read_latest(limit: int = 1):
             """
             SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
             FROM sensor_data
-            ORDER BY timestamp DESC
+            ORDER BY timestamp DESC NULLS LAST, id DESC
             LIMIT %s;
             """,
             (limit,),

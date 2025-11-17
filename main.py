@@ -29,7 +29,7 @@ app.add_middleware(
 
 #Gzip responses
 app.add_middleware(GZipMiddleware, minimum_size=500)
-app.mount("/static", StaticFiles(directory="static", name="static"))
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Get your secrets from the environment (unchanged)
 DATABASE_URL = os.getenv("DATABASE_URL")

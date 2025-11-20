@@ -5,7 +5,7 @@ import psycopg2
 import json  # >>>>> 1. IMPORT JSON <<<<<
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks # >>>>> 2. IMPORT WEBSOCKETS <<<<<
 from dotenv import load_dotenv
-from typing import List, Optional  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
+from typing import List, Optional, Annotated  # >>>>> 3. IMPORT LIST FOR TYPE HINTING <<<<<
 from datetime import datetime, timezone
 from fastapi.responses import HTMLResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -33,7 +33,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Get your secrets from the environment (unchanged)
 DATABASE_URL = os.getenv("DATABASE_URL")
-SECRET_API_KEY = os.getenv("UPLOADER_API_KEY")
+SECRET_API_KEY = os.getenv("SECRET_KEY")
+
+XApiKey = Annotated[str, Header(alias="x-api-key")]
 
 # ===================================================================
 # >>>>> 4. ADD THE WEBSOCKET CONNECTION MANAGER <<<<<
@@ -227,7 +229,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # You could also use it to receive messages *from* the client if needed.
         while True:
             # Just keep the connection open
-            await websocket.receive_text()  # acts like a heartbeat
+            await asyncio.sleep(60)  # acts like a heartbeat
 
     except WebSocketDisconnect:
         # When the client disconnects, remove them from the list
@@ -250,7 +252,7 @@ def read_sensor_data(time_range: str = "30d", limit: int = 500, offset: int = 0)
     
     
     base_sql = """
-        SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score 
+        SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, pressure, gas
         FROM sensor_data
     """
     
@@ -298,44 +300,45 @@ def read_sensor_data(time_range: str = "30d", limit: int = 500, offset: int = 0)
 # This is the endpoint your IoT uploader script calls.
 # ===================================================================
 @app.post("/data")
-async def create_upload(data: dict, x_api_key: str = Header(None), background_tasks: BackgroundTasks = ...):
+async def create_upload(data: dict, x_api_key: XApiKey, background_tasks: BackgroundTasks = ...):
     # 1. Security Check: Validate the API key (unchanged)
     if x_api_key != SECRET_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
+    # 2. Extract data from the request (unchanged)
+    ts_raw = data.get('created_at')
+    ts = coerce_ts(ts_raw)
+    temp = data.get('temperature')
+    hum = data.get('humidity')
+    lat = data.get('latitude')
+    lon = data.get('longitude')
+    fs = data.get('fire_score')
+    pres = data.get('pressure')
+    gas = data.get('gas')
+        
+      # 3) Write
     conn = None
     try:
-        # 2. Extract data from the request (unchanged)
-        ts_id = data.get('thingspeak_id')
-        ts_raw = data.get('created_at')
-        ts = coerce_ts(ts_raw)
-        temp = data.get('temperature')
-        hum = data.get('humidity')
-        lat = data.get('latitude')
-        lon = data.get('longitude')
-        score = data.get('fire_score')
-        
-        # 3. Insert the new data into the database (unchanged)
         conn = psycopg2.connect(DATABASE_URL)
-        with conn.cursor() as cur:
-            sql = """
-                INSERT INTO sensor_data (timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (thingspeak_id) DO NOTHING;
-            """
-            cur.execute(sql, (ts, temp, hum, lat, lon, score, ts_id))
-        conn.commit()
-        
-        print(f"Successfully inserted/updated data for ThingSpeak ID: {ts_id}")
+        with conn, conn.cursor() as cur:  # context manager auto-commits/rollbacks
+            cur.execute(
+                """
+                INSERT INTO sensor_data
+                  (timestamp, temperature, humidity, latitude, longitude, fire_score, pressure, gas)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (ts, temp, hum, lat, lon, fs, pres, gas),
+            )
 
-        # >>>>> 4. NEW STEP: BROADCAST THE NEW DATA TO ALL LISTENERS <<<<<
-        # We convert the 'data' dictionary into a JSON string to send it.
-        # Broadcast afer responding
-        payload = json.dumps(data)
-        background_tasks.add_task(manager.broadcast, payload)
-        
-        return {"status": "success", "data_received": data}
-        
+        # 4) Broadcast after commit
+        background_tasks.add_task(manager.broadcast, json.dumps({
+            "created_at": ts.isoformat(),
+            "temperature": temp, "humidity": hum, "latitude": lat, "longitude": lon,
+            "fire_score": fs, "pressure": pres, "gas": gas
+        }))
+
+        return {"status": "success"}
+
     except Exception as e:
         print(f"Database write error: {e}")
         raise HTTPException(status_code=500, detail="Failed to write data.")
@@ -356,7 +359,7 @@ def read_latest(limit: int = 1):
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, thingspeak_id
+            SELECT id, timestamp, temperature, humidity, latitude, longitude, fire_score, pressure, gas
             FROM sensor_data
             ORDER BY timestamp DESC NULLS LAST, id DESC
             LIMIT %s;
